@@ -6,25 +6,13 @@ from torch.autograd import Variable
 import params
 
 
-# todo check all the dim matching, note that img is [N, C_in, H, W] while tf defines it as [N, H, W, C_in]
 def flatten(tensor):
     return tensor.view(tensor.data.size(0), -1)
 
 
-def calc_output_dim(models, input_dim):
-    """
-    :param models: a list of model objects
-    :param input_dim: input dimension
-    :return: the corresponding output dimension (in one number)
-    """
-    input_tensor = torch.from_numpy(input_dim)
-    input_tensor.unsqueeze_(0)
-    img = Variable(input_tensor).float()
-    for model in models:
-        output = model(img)
-    if len(models) == 0:
-        output = img
-    return output.data.view(output.data.size(0), -1).size(1)
+def calculate_flat_fts(in_size, features):
+    f = features(Variable(torch.ones(1, *in_size[1:])))
+    return int(np.prod(f.size()[1:]))
 
 
 def project_latent_vars(proj_shape, latent_vars, combine_method='sum'):
@@ -76,7 +64,7 @@ class SimpleGenerator(nn.Module):
         ###################################################
         self.conv_layers = []
         in_channel = list(source_image_shape)[1]
-        for i in range(1, params.simple_num_conv_layers):
+        for i in range(0, params.simple_num_conv_layers):
             self.conv1 = nn.Sequential(
                 nn.Conv2d(in_channel, params.simple_conv_filters, kernal_size=params.generator_kernel_size),
                 nn.BatchNorm2d(params.simple_conv_filters),
@@ -86,7 +74,7 @@ class SimpleGenerator(nn.Module):
 
         # Project back to the right # image channels
         self.conv2 = nn.Sequential(
-            nn.Conv2d(in_channel, list(target_image_shape)[-1], kernal_size=1),
+            nn.Conv2d(in_channel, list(target_image_shape)[1], kernal_size=1),
             nn.Tanh()
         )
 
@@ -112,15 +100,16 @@ class ResidualBlock(nn.Module):
     Create a resnet block
     """
     def __init__(self, in_dim):
+        print("ResidualBlock")
         super(ResidualBlock, self).__init__()
 
         self.conv1 = nn.Sequential(
-            nn.Conv2d(in_dim, params.resnet_filters, kernel_size=params.generator_kernel_size),
+            nn.Conv2d(in_dim, params.resnet_filters, kernel_size=params.generator_kernel_size, padding=(params.generator_kernel_size-1)//2),
             nn.BatchNorm2d(params.resnet_filters),
             nn.ReLU()
         )
         self.conv2 = nn.Sequential(
-            nn.Conv2d(params.resnet_filters, params.resnet_filters, kernel_size=params.generator_kernel_size),
+            nn.Conv2d(params.resnet_filters, params.resnet_filters, kernel_size=params.generator_kernel_size, padding=(params.generator_kernel_size-1)//2),
             nn.BatchNorm2d(params.resnet_filters),
         )
 
@@ -137,17 +126,18 @@ class ResnetStack(nn.Module):
     Create a resnet style transfer block
     """
     def __init__(self, in_channels, output_shape):
+        print("ResnetStack")
         super(ResnetStack, self).__init__()
         # todo to be changed
-        self.conv1 = nn.Conv2d(in_channels, params.resnet_filters, kernel_size=params.generator_kernel_size)
+        self.conv1 = nn.Conv2d(in_channels, params.resnet_filters, kernel_size=params.generator_kernel_size, padding=(params.generator_kernel_size-1)//2)
         self.relu = nn.ReLU()
         self.resblks = self.make_layers(params.resnet_filters, params.resnet_blocks)
-        self.conv2 = nn.Conv2d(params.resnet_filters, output_shape[-1], kernel_size=1)
+        self.conv2 = nn.Conv2d(params.resnet_filters, output_shape[0], kernel_size=1)
         self.tanh = nn.Tanh()
 
     def make_layers(self, in_channels, num_blks):
         layers = []
-        for i in range(1, num_blks):
+        for i in range(0, num_blks):
             layers.append(ResidualBlock(in_channels))
 
         return nn.Sequential(*layers)
@@ -165,6 +155,7 @@ class ResnetStack(nn.Module):
 class ResnetGenerator(nn.Module):
     """Creates a ResNet-based generator."""
     def __init__(self, source_images_size, output_shape, latent_vars=None):
+        print("ResnetGenerator")
         super(ResnetGenerator, self).__init__()
         self.latent_vars = latent_vars
         in_channels = list(source_images_size)[1]
@@ -187,7 +178,7 @@ class ResnetGenerator(nn.Module):
 
 class ResidualInterpretationBlock(nn.Module):
     def __init__(self, images_size):
-        super(ResidualBlock, self).__init__()
+        super(ResidualInterpretationBlock, self).__init__()
 
         self.conv1 = nn.Conv2d(list(images_size)[1], params.res_int_filters, kernel_size=params.generator_kernel_size)
         self.relu1 = nn.ReLU(inplace=True)
@@ -224,7 +215,7 @@ class ResidualInterpretationGenerator(nn.Module):
         super(ResidualInterpretationGenerator, self).__init__()
         self.images_size = images_size
         if latent_vars:
-            projected_latent = project_latent_vars(list(images_size)[1:3] + [list(images_size)[-1]],
+            projected_latent = project_latent_vars(list(images_size)[1:3] + [list(images_size)[1]],
                                                    latent_vars=latent_vars,
                                                    combine_method='sum')
             # images = torch.cat([images, projected_latent], 1)
@@ -235,7 +226,7 @@ class ResidualInterpretationGenerator(nn.Module):
 
     def make_layer(self):
         layers = []
-        for i in range(1, params.res_int_blocks):
+        for i in range(0, params.res_int_blocks):
             layers.append(ResidualInterpretationBlock(self.images_size))
         return nn.Sequential(*layers)
 
@@ -246,6 +237,7 @@ class ResidualInterpretationGenerator(nn.Module):
 class Discriminator(nn.Module):
     """Creates a discriminator for a GAN."""
     def __init__(self, images_size):
+        print("Discriminator")
         super(Discriminator, self).__init__()
         if params.discriminator_image_noise:
             # images = self.add_noise(images)
@@ -260,44 +252,35 @@ class Discriminator(nn.Module):
         self.lrelu = nn.LeakyReLU(params.lrelu_leakiness)
         # add noise
 
-        # self.discriminator_blks = []
+        self.discriminator_blks = []
         block_id = 2
         in_channel = params.num_discriminator_filters
-        # while height > params.projection_shape_size:
-        #     layers = []
-        #     num_filters = int(params.num_discriminator_filters * (params.discriminator_filter_factor ** (block_id - 1)))
-        #     for conv_id in range(1, params.discriminator_conv_block_size):
-        #         layers.append(nn.Conv2d(in_channel, num_filters, kernel_size=params.discriminator_kernel_size))
-        #         layers.append(nn.BatchNorm2d(num_filters))
-        #         layers.append(nn.LeakyReLU(params.lrelu_leakiness))
-        #         in_channel = num_filters
-        #
-        #     layers.append(
-        #         nn.Conv2d(num_filters, num_filters, kernel_size=params.discriminator_kernel_size))
-        #
-        #     if params.discriminator_do_pooling:
-        #         layers.append(nn.AvgPool2d(kernel_size=2, stride=2))
-        #
-        #     noise = self.add_noise(hidden=None, scope_num=block_id)
-        #     layers.append(noise)
-        #     self.discriminator_blks.append(nn.Sequential(*layers))
-        #     block_id += 1
-        layers = []
-        num_filters = int(params.num_discriminator_filters * (params.discriminator_filter_factor ** (block_id - 1)))
-        for conv_id in range(1, params.discriminator_conv_block_size):
-            layers.append(nn.Conv2d(in_channel, num_filters, kernel_size=params.discriminator_kernel_size))
-            layers.append(nn.BatchNorm2d(num_filters))
-            layers.append(nn.LeakyReLU(params.lrelu_leakiness))
-            in_channel = num_filters
+        # height after first conv layer
+        height = (images_size[2] - params.discriminator_kernel_size)//params.discriminator_first_stride + 1
+        # todo check how to decide the projection shape
+        while height >= params.projection_shape_size:
+            layers = []
+            num_filters = int(params.num_discriminator_filters * (params.discriminator_filter_factor ** (block_id - 1)))
+            for conv_id in range(0, params.discriminator_conv_block_size):
+                layers.append(nn.Conv2d(in_channel, num_filters, kernel_size=params.discriminator_kernel_size))
+                layers.append(nn.BatchNorm2d(num_filters))
+                layers.append(nn.LeakyReLU(params.lrelu_leakiness))
+                in_channel = num_filters
+                height = (height - params.discriminator_kernel_size) + 1
+            if params.discriminator_do_pooling:
+                layers.append(nn.AvgPool2d(kernel_size=2, stride=2))
+                height = (height - 2)/2+1
+            #else:
+             #   layers.append(
+              #      nn.Conv2d(num_filters, num_filters, kernel_size=params.discriminator_kernel_size))
 
-            layers.append(
-                nn.Conv2d(num_filters, num_filters, kernel_size=params.discriminator_kernel_size))
-
-        if params.discriminator_do_pooling:
-            layers.append(nn.AvgPool2d(kernel_size=2, stride=2))
-        self.discriminator_blk = nn.Sequential(*layers)
-
-        self.fully_connected = nn.Linear(num_filters, 1)
+            # noise = self.add_noise(hidden=None, scope_num=block_id)
+            # layers.append(noise)
+            self.discriminator_blks.append(nn.Sequential(*layers))
+            block_id += 1
+        # todo: think a way to change teh hard code calculation
+        self.discriminator_blks = nn.Sequential(*self.discriminator_blks)
+        self.fully_connected = nn.Linear(num_filters * height * height, 1)
 
     # todo disable this now
     def add_noise(self, hidden, scope_num=None):
@@ -308,11 +291,10 @@ class Discriminator(nn.Module):
         return hidden + torch.FloatTensor(list(hidden.size())).normal_(mean=0.0, std=params.discriminator_noise_stddev)
 
     def forward(self, x):
-
         out = self.conv1(x)
         out = self.lrelu(out)
-        while list(out.size())[2] > params.projection_shape_size:
-            out = self.discriminator_blk(out)
+        # while list(out.size())[2] > params.projection_shape_size:
+        out = self.discriminator_blks(out)
         out = flatten(out)
         out = self.fully_connected(out)
         return out
@@ -324,29 +306,35 @@ class DoublingCNNAndQuaternion(nn.Module):
     """
 
     def __init__(self, images_size, num_private_layers, num_classes):
+        print("DoublingCNNAndQuaternion")
         super(DoublingCNNAndQuaternion, self).__init__()
         in_channel = list(images_size)[1]
         height = list(images_size)[2]
         depth = 32
         layer_id = 1
-        self.private_layers = []
 
+        self.private_layers = []
         while num_private_layers > 0 and height > 5:
             self.private_layers.append(self.make_layer(in_channel, depth, 3, 2, 2))
             in_channel = depth
-            height = list(self.private_layers[-1].size())[2]
+            height = (height - 3) + 1       # conv layer
+            height = (height - 2) / 2 + 1   # pooling layer
             depth *= 2
             layer_id += 1
             num_private_layers -= 1
+        self.private_layers = nn.Sequential(*self.private_layers)
 
         self.shared_layers = []
         while height > 5:
             self.shared_layers.append(self.make_layer(in_channel, depth, 3, 2, 2))
+            height = (height - 3) + 1  # conv layer
+            height = (height - 2) / 2 + 1  # pooling layer
             in_channel = depth
             depth *= 2
             layer_id += 1
+        self.shared_layers = nn.Sequential(*self.shared_layers)
 
-        self.FC1 = nn.Linear(in_channel, 100)
+        self.FC1 = nn.Linear(calculate_flat_fts(images_size, nn.Sequential(self.private_layers, self.shared_layers)), 100)
         self.quaternion = nn.Sequential(
             nn.Linear(100, 4),
             nn.Tanh()
@@ -359,10 +347,8 @@ class DoublingCNNAndQuaternion(nn.Module):
 
     def forward(self, x):
         out = x
-        for layer in self.private_layers:
-            out = layer(out)
-        for layer in self.shared_layers:
-            out = layer(out)
+        out = self.private_layers(out)
+        out = self.shared_layers(out)
         out = flatten(out)
         out = self.FC1(out)
         out = F.dropout(out, 0.5, training=params.is_training)

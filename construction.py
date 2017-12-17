@@ -10,10 +10,11 @@ def add_task_specific_model(images_size, num_classes):
     """
     task = params.task_tower
     if task == 'doubling_pose_estimator':
-        logits, quaternion_pred = model.DoublingCNNAndQuaternion(images_size, params.num_private_layers, num_classes)
+        # todo get logits, quaternion_pred from it
+        doubling_pose_estimator = model.DoublingCNNAndQuaternion(images_size, params.num_private_layers, num_classes)
     else:
         raise ValueError('Undefined task classifier %s' % task)
-    return  logits, quaternion_pred
+    return doubling_pose_estimator
 
 
 def create_model(

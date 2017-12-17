@@ -8,20 +8,28 @@ from torch.autograd import Variable
 from torch.optim import lr_scheduler
 from torchvision import *
 import itertools
-from util import LoggerGenerator
-from datetime import datetime
+from logger import Logger
 
 
-def run_training(run_dir, checkpoint_dir):
+def to_np(x):
+    return x.data.cpu().numpy()
+
+
+def to_var(x):
+    if torch.cuda.is_available():
+        x = x.cuda()
+    return Variable(x)
+
+
+def run_training(checkpoint_dir):
     print("**************************************************************")
     print("**************************************************************")
     print("Running from here")
     print("**************************************************************")
     print("**************************************************************")
 
-    for path in [run_dir, checkpoint_dir]:
-        if not os.path.exists(path):
-            os.mkdir(path)
+    if not os.path.exists(checkpoint_dir):
+        os.mkdir(checkpoint_dir)
 
     # preprocess the inputs
     # todo to be changed
@@ -33,6 +41,7 @@ def run_training(run_dir, checkpoint_dir):
 
     # image loading
     # create dataloader
+    print("Start loading images")
     source_dataset = datasets.ImageFolder(root=params.source_data_path, transform=preprocess)
     source_loader = torch.utils.data.DataLoader(source_dataset,
                                                 batch_size=params.batch_size, shuffle=params.shuffle_batch)
@@ -40,6 +49,7 @@ def run_training(run_dir, checkpoint_dir):
     target_loader = torch.utils.data.DataLoader(target_dataset,
                                                 batch_size=params.batch_size, shuffle=params.shuffle_batch)
 
+    print("Start creating model")
     # model components
     tgt_imgs_shape = src_imgs_shape = [params.batch_size, 3, 224, 224]
     model_components = construction.create_model(target_images_shape=tgt_imgs_shape,
@@ -48,16 +58,30 @@ def run_training(run_dir, checkpoint_dir):
     generator = model_components['generator']
     transferred_discriminator = model_components['transferred_domain_logits']
     target_discriminator = model_components['target_domain_logits']
-    source_task_classfier = model_components['source_task_classifier']
-    target_task_classfier = model_components['target_task_classifier']
-    transferred_task_classfier = model_components['transferred_task_classifier']
+    source_task_classifier = model_components['source_task_classifier']
+    target_task_classifier = model_components['target_task_classifier']
+    transferred_task_classifier = model_components['transferred_task_classifier']
 
-    logger.info('***** Finish creating model ******')
+    # if there is saved model in the checkpoint_dir, load it
+    if os.listdir(checkpoint_dir):
+        generator.load_state_dict(torch.load(os.path.join(checkpoint_dir, "generator.pt")))
+        transferred_discriminator.load_state_dict(torch.load(os.path.join(checkpoint_dir, "transferred_discriminator.pt")))
+        target_discriminator.load_state_dict(torch.load(os.path.join(checkpoint_dir, "target_discriminator.pt")))
+        source_task_classifier.load_state_dict(torch.load(os.path.join(checkpoint_dir, "source_task_classifier.pt")))
+        target_task_classifier.load_state_dict(torch.load(os.path.join(checkpoint_dir, "target_task_classifier.pt")))
+        transferred_task_classifier.load_state_dict(torch.load(os.path.join(checkpoint_dir, "transferred_task_classifier.pt")))
+
+    print('***** Finish creating model ******')
+    # print(transferred_discriminator)
 
     # optimizers
     lr = params.learning_rate
-    opt_generator = torch.optim.Adam(generator.parameters(), lr=lr, betas=params.adam_beta1)
-    opt_transferred_discriminator = torch.optim.Adam(transferred_discriminator.parameters(), lr=lr, betas=params.adam_beta1)
+    opt_generator = torch.optim.Adam(generator.parameters(), lr=lr, betas=params.adam_betas)
+    opt_transferred_discriminator = torch.optim.Adam(transferred_discriminator.parameters(), lr=lr, betas=params.adam_betas)
+    opt_target_discriminator = torch.optim.Adam(target_discriminator.parameters(), lr=lr, betas=params.adam_betas)
+    opt_transferred_classifier = torch.optim.Adam(transferred_task_classifier.parameters(), lr=lr, betas=params.adam_betas)
+    opt_target_classifier = torch.optim.Adam(target_task_classifier.parameters(), lr=lr, betas=params.adam_betas)
+    opt_source_classifier = torch.optim.Adam(source_task_classifier.parameters(), lr=lr, betas=params.adam_betas)
 
     # for saving gradient
     grad_records = {}
@@ -81,7 +105,7 @@ def run_training(run_dir, checkpoint_dir):
         zipped_loader = enumerate(zip(source_loader, target_loader))
         avg_generator_loss = 0
         avg_discriminator_loss = 0
-        logger.info("epoch {} started".format(i))
+        print("epoch %d started" % i)
         for step, ((images_src, labels_src), (images_tgt, labels_tgt)) in zipped_loader:
             print("batch %s started" % step)
             if torch.cuda.is_available():
@@ -96,48 +120,94 @@ def run_training(run_dir, checkpoint_dir):
             src_lbls = Variable(labels_src)
             tgt_lbls = Variable(labels_tgt)
 
-            if tgt_imgs.dtype.name != 'float32':
-                raise ValueError('target_images must be tf.float32 and [-1, 1] normalized.')
-
-            if src_imgs.dtype.name != 'float32':
-                raise ValueError('source_images must be tf.float32 and [-1, 1] normalized.')
-
             # specify model
             transferred_imgs = generator(src_imgs)
             transferred_discriminator = transferred_discriminator(transferred_imgs)
-            transferred_pred = transferred_task_classfier(transferred_imgs)
-            target_pred = target_task_classfier(tgt_imgs)
+            source_task_logits, source_quaternion = source_task_classifier(src_imgs)
+            transferred_task_logits, transfer_quaternion = transferred_task_classifier(transferred_imgs)
+            target_task_logits, target_quaternion = target_task_classifier(tgt_imgs)
 
             # specify losses
             generator_loss = losses.g_step_loss(source_images=src_imgs,
                                                 source_labels=src_lbls,
+                                                source_task_logits=source_task_logits,
                                                 transferred_images=transferred_imgs,
-                                                transferred_domain_logits=transferred_discriminator,
-                                                num_classes=params.num_classes)
-            discriminator_loss = losses.d_step_loss(transfer_pred=transferred_pred,
+                                                transferred_task_logits=transferred_task_logits,
+                                                transferred_domain_logits=transferred_discriminator)
+            discriminator_loss = losses.d_step_loss(transferred_task_logits=transferred_task_logits,
                                                     transfer_label=src_lbls,
-                                                    target_pred=target_pred,
+                                                    target_task_logits=target_task_logits,
                                                     target_label=tgt_lbls,
-                                                    source_labels=src_lbls,
-                                                    num_classes=params.num_classes)
+                                                    source_labels=src_lbls)
 
             avg_generator_loss += generator_loss.data.cpu().numpy()[0]
             avg_discriminator_loss += discriminator_loss.data.cpu().numpy()[0]
 
-            # todo backprop and update
+            # forward, backprop and updating
+            opt_generator.zero_grad()
+            opt_target_discriminator.zero_grad()
+            opt_transferred_discriminator.zero_grad()
+            opt_target_classifier.zero_grad()
+            opt_transferred_classifier.zero_grad()
+            opt_source_classifier.zero_grad()
 
+            generator_loss.backward(retain_graph=True)
+            discriminator_loss.backward(retain_graph=True)
+
+            opt_generator.step()
+            opt_target_discriminator.step()
+            opt_transferred_discriminator.step()
+            opt_target_classifier.step()
+            opt_transferred_classifier.step()
+            opt_source_classifier.step()
 
         generator_loss_records.append(avg_generator_loss)
         discriminator_loss_records.append(avg_discriminator_loss)
-        logger.info("epoch {} | g_loss {}, d_loss {}".format(i, avg_generator_loss / (step + 1),
-                                                             avg_discriminator_loss / (step - 1)))
+        print("epoch %d | g_loss %f, d_loss %f" % (i, avg_generator_loss / (step + 1),
+                                                   avg_discriminator_loss / (step - 1)))
 
-    # save model
-    torch.save(generator.state_dict(), os.path.join(checkpoint_dir, 'generator.model'))
-    torch.save(target_discriminator.state_dict(), os.path.join(checkpoint_dir, 'target_discriminator.model'))
-    torch.save(transferred_discriminator.state_dict(), os.path.join(checkpoint_dir, 'transferred_discriminator.model'))
-    # todo save classifier?
-    logger.info("model saved")
+        # ---- Tensorboard Logging ---- #
+        # (1) Log the scalar values
+        info = {
+            'avg_generator_loss': avg_generator_loss.data[0],
+            'avg_discriminator_loss': avg_discriminator_loss.data[0]
+        }
+        for tag, value in info.items():
+            logger.scalar_summary(tag, value, step)
+        # (2) Log values and gradients of the parameters (histogram)
+        for tag, value in generator.named_parameters():
+            tag = tag.replace('.', '/')
+            logger.histo_summary(tag, to_np(value), step)
+            logger.histo_summary(tag + '/grad', to_np(value.grad), step)
+        for tag, value in transferred_discriminator.named_parameters():
+            tag = tag.replace('.', '/')
+            logger.histo_summary(tag, to_np(value), step)
+            logger.histo_summary(tag + '/grad', to_np(value.grad), step)
+        for tag, value in transferred_task_classifier.named_parameters():
+            tag = tag.replace('.', '/')
+            logger.histo_summary(tag, to_np(value), step)
+            logger.histo_summary(tag + '/grad', to_np(value.grad), step)
+        # (3) Log the images
+        info = {
+            'source_images': to_np(src_imgs.view(-1, 32, 32)[:10]),
+            'transfer_images': to_np(transferred_imgs.view(-1, 32, 32)[:10]),
+            'target_images': to_np(tgt_imgs.view(-1, 32, 32)[:10])
+        }
+        for tag, images in info.items():
+            logger.image_summary(tag, images, step)
+
+        if i % 10 == 0:
+            # save model
+            torch.save(generator.state_dict(), os.path.join(checkpoint_dir, 'generator.pt'))
+            torch.save(target_discriminator.state_dict(), os.path.join(checkpoint_dir, 'target_discriminator.pt'))
+            torch.save(transferred_discriminator.state_dict(),
+                       os.path.join(checkpoint_dir, 'transferred_discriminator.pt'))
+            torch.save(source_task_classifier.state_dict(), os.path.join(checkpoint_dir, 'source_task_classifier.pt'))
+            torch.save(target_task_classifier.state_dict(), os.path.join(checkpoint_dir, 'target_task_classifier.pt'))
+            torch.save(transferred_task_classifier.state_dict(),
+                       os.path.join(checkpoint_dir, 'transferred_task_classifier.pt'))
+            print("model saved")
+
 
     return {
         # todo return records
@@ -146,19 +216,18 @@ def run_training(run_dir, checkpoint_dir):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--run_dir', help='directory for saving outputs during running')
     parser.add_argument('--checkpoint_dir', help='directory for saving checkpoints')
     args = parser.parse_args()
 
     run_training(
-        run_dir=args.run_dir,
         checkpoint_dir=args.checkpoint_dir,
     )
 
 
 if __name__ == '__main__':
-    current_time = str(datetime.now())[:-7].replace(" ", "T").replace(":", "-")
-    log_file_name = "[{}]_{}".format(current_time, "training.txt")
-    logger = LoggerGenerator.get_logger(log_file_path="log/{}".format(log_file_name))
+    # current_time = str(datetime.now())[:-7].replace(" ", "T").replace(":", "-")
+    # log_file_name = "[{}]_{}".format(current_time, "training.txt")
+    # logger = LoggerGenerator.get_logger(log_file_path="log/{}".format(log_file_name))
+    logger = Logger('./log')
 
     main()

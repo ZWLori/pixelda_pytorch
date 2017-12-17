@@ -1,14 +1,16 @@
 import platform
 _IS_LINUX = platform.system() == "Linux"
 
-source_data_path='/Users/ZWLori/Downloads/domain_adaptation_images/amazon'
-target_data_path='/Users/ZWLori/Downloads/domain_adaptation_images/webcam'
+#source_data_path='/Users/ZWLori/Downloads/domain_adaptation_images/amazon'
+#target_data_path='/Users/ZWLori/Downloads/domain_adaptation_images/webcam'
+source_data_path='/home/wanlu/data/domain_adaptation_images2/amazon'
+target_data_path='/home/wanlu/data/domain_adaptation_images2/webcam'
 
 image_scale = 224
 num_classes = 31
 epochs = 1000
-dataset_mean = 0.5
-dataset_std = 0/5
+dataset_mean = (0.5, 0.5, 0.5)
+dataset_std = (0.5, 0.5, 0.5)
 shuffle_batch = True
 
 # The name of the architecture to use.
@@ -53,7 +55,7 @@ num_encoder_filters=64
 # This is the shape to which the noise vector is projected (if we're
 # transferring from noise).
 # Write this way instead of [4 4 64] for hparam search flexibility
-projection_shape_size=4
+projection_shape_size=220
 projection_shape_channels=64
 
 # Indicates the method by which we enlarge the spatial representation
@@ -177,7 +179,7 @@ lr_decay_steps=20000
 lr_decay_rate=0.95
 
 # Recomendation from the DCGAN paper:
-adam_beta1=0.5
+adam_betas=(0.5, 0.999)
 clip_gradient_norm=5.0
 
 # The number of times we run the discriminator train_op in a row.
