@@ -30,7 +30,7 @@ def make_one_hot(labels, C=2):
     return target
 
 
-def get_domain_classifier_losses(transfer_pred, transfer_label, target_pred, target_label):
+def get_domain_classifier_losses(transferred_domain_logits, target_domain_logits):
     """
     Losses replated to the domain-classifier
     :return: loss, a tensor representing the total task-classfier loss
@@ -39,17 +39,13 @@ def get_domain_classifier_losses(transfer_pred, transfer_label, target_pred, tar
         print("Domain classifier loss weight is 0.")
         return 0
     print("get_domain_classifier_losses")
-    transfer_label = transfer_label.view(params.batch_size, 1)
-    transfer_label = torch.zeros(params.batch_size, params.num_classes).scatter_(1, transfer_label.data, 1)
-    transfer_label = Variable(transfer_label)
+    transfer_label = torch.ones_like(transferred_domain_logits)
     transferred_criterion = loss.MultiLabelSoftMarginLoss()
-    transferred_domain_loss = transferred_criterion(transfer_pred, transfer_label)
+    transferred_domain_loss = transferred_criterion(transferred_domain_logits, transfer_label)
 
-    target_label = target_label.view(params.batch_size, 1)
-    target_label = torch.zeros(params.batch_size, params.num_classes).scatter_(1, target_label.data, 1)
-    target_label = Variable(target_label)
+    target_label = torch.ones_like(target_domain_logits)
     target_criterion = loss.MultiLabelSoftMarginLoss()
-    target_domain_loss = target_criterion(target_pred, target_label)
+    target_domain_loss = target_criterion(target_domain_logits, target_label)
 
     total_domain_loss = transferred_domain_loss + target_domain_loss
     total_domain_loss *= params.domain_loss_weight
@@ -76,7 +72,7 @@ def get_task_specific_losses(source_labels, source_task=None, transfer_task=None
         transfer_loss = transfer_criterion(transfer_task, source_labels)
         task_specific_loss += transfer_loss
 
-    print("Task specific loss = %s" %task_specific_loss)
+    print("Task specific loss = %s" % task_specific_loss)
 
     return task_specific_loss
 
@@ -123,7 +119,7 @@ def g_step_loss(source_images, source_labels, source_task_logits, transferred_im
 
     return generator_loss
 
-def d_step_loss(transferred_task_logits, transfer_label, target_task_logits, target_label, source_labels):
+def d_step_loss(transferred_task_logits, transferred_domain_logits, target_domain_logits, source_labels):
     """
     Configure the loss function which runs during the discrimination step
     Note that during the d-step, the model optimizes both the domain classifier and the task classifier
@@ -132,7 +128,7 @@ def d_step_loss(transferred_task_logits, transfer_label, target_task_logits, tar
     ######################
     #    Domain Loss     #
     ######################
-    domain_classifier_loss = get_domain_classifier_losses(transferred_task_logits, transfer_label, target_task_logits, target_label)
+    domain_classifier_loss = get_domain_classifier_losses(transferred_domain_logits, target_domain_logits)
 
     ######################
     # Task Specific Loss #

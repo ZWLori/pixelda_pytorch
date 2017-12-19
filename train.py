@@ -122,7 +122,8 @@ def run_training(checkpoint_dir):
 
             # specify model
             transferred_imgs = generator(src_imgs)
-            transferred_discriminator = transferred_discriminator(transferred_imgs)
+            transferred_domain_logits = transferred_discriminator(transferred_imgs)
+            target_domain_logits = target_discriminator(tgt_imgs)
             source_task_logits, source_quaternion = source_task_classifier(src_imgs)
             transferred_task_logits, transfer_quaternion = transferred_task_classifier(transferred_imgs)
             target_task_logits, target_quaternion = target_task_classifier(tgt_imgs)
@@ -135,9 +136,8 @@ def run_training(checkpoint_dir):
                                                 transferred_task_logits=transferred_task_logits,
                                                 transferred_domain_logits=transferred_discriminator)
             discriminator_loss = losses.d_step_loss(transferred_task_logits=transferred_task_logits,
-                                                    transfer_label=src_lbls,
-                                                    target_task_logits=target_task_logits,
-                                                    target_label=tgt_lbls,
+                                                    transferred_domain_logits=transferred_domain_logits,
+                                                    target_domain_logits=target_domain_logits,
                                                     source_labels=src_lbls)
 
             avg_generator_loss += generator_loss.data.cpu().numpy()[0]
