@@ -30,7 +30,7 @@ def make_one_hot(labels, C=2):
     return target
 
 
-def get_domain_classifier_losses(transferred_domain_logits, target_domain_logits):
+def get_domain_classifier_losses(trans_domain_logits, target_domain_logits):
     """
     Losses replated to the domain-classifier
     :return: loss, a tensor representing the total task-classfier loss
@@ -38,10 +38,9 @@ def get_domain_classifier_losses(transferred_domain_logits, target_domain_logits
     if params.domain_loss_weight == 0:
         print("Domain classifier loss weight is 0.")
         return 0
-    print("get_domain_classifier_losses")
-    transfer_label = torch.ones_like(transferred_domain_logits)
+    transfer_label = torch.ones_like(trans_domain_logits)
     transferred_criterion = loss.MultiLabelSoftMarginLoss()
-    transferred_domain_loss = transferred_criterion(transferred_domain_logits, transfer_label)
+    transferred_domain_loss = transferred_criterion(trans_domain_logits, transfer_label)
 
     target_label = torch.ones_like(target_domain_logits)
     target_criterion = loss.MultiLabelSoftMarginLoss()
@@ -50,9 +49,7 @@ def get_domain_classifier_losses(transferred_domain_logits, target_domain_logits
     total_domain_loss = transferred_domain_loss + target_domain_loss
     total_domain_loss *= params.domain_loss_weight
 
-    print("Domain loss = %s" % total_domain_loss)
     return total_domain_loss
-
 
 
 def get_task_specific_losses(source_labels, source_task=None, transfer_task=None):
@@ -72,10 +69,7 @@ def get_task_specific_losses(source_labels, source_task=None, transfer_task=None
         transfer_loss = transfer_criterion(transfer_task, source_labels)
         task_specific_loss += transfer_loss
 
-    print("Task specific loss = %s" % task_specific_loss)
-
     return task_specific_loss
-
 
 
 def transfer_similarity_loss(reconstructions, source_images, weight):
@@ -93,51 +87,57 @@ def transfer_similarity_loss(reconstructions, source_images, weight):
 
     return reconstruction_similarity_loss
 
-def g_step_loss(source_images, source_labels, source_task_logits, transferred_images, transferred_domain_logits, transferred_task_logits):
+
+def g_step_loss(source_images, source_labels, source_task_logits, trans_images, trans_domain_logits, trans_task_logits):
     """
     Configure the loss function which runs during the generation step
-    :return:
     """
-    print("g_step_loss")
     generator_loss = 0
     style_transfer_criterion = nn.MultiLabelSoftMarginLoss()
-    style_transfer_loss = style_transfer_criterion(transferred_domain_logits, torch.ones_like(transferred_domain_logits))
+    style_transfer_loss = style_transfer_criterion(trans_domain_logits, torch.ones_like(trans_domain_logits))
 
     generator_loss += style_transfer_loss
 
     ###########################
     # Content Similarity Loss #
     ###########################
-    generator_loss += transfer_similarity_loss(transferred_images,
+    generator_loss += transfer_similarity_loss(trans_images,
                                                source_images,
                                                params.transferred_similarity_loss_weight)
 
-    # optimize the style transfer network to maximize classificaton accuracy
-    if source_labels is not None and params.task_tower_in_g_step:
-        # todo specify source_task as well as transfer_task
-        generator_loss += get_task_specific_losses(source_labels, source_task_logits, transferred_task_logits) * params.task_loss_in_g_weight
-
-    return generator_loss
-
-def d_step_loss(transferred_task_logits, transferred_domain_logits, target_domain_logits, source_labels):
-    """
-    Configure the loss function which runs during the discrimination step
-    Note that during the d-step, the model optimizes both the domain classifier and the task classifier
-    :return:
-    """
-    ######################
-    #    Domain Loss     #
-    ######################
-    domain_classifier_loss = get_domain_classifier_losses(transferred_domain_logits, target_domain_logits)
-
+    # optimize the style transfer network to maximize classification accuracy
     ######################
     # Task Specific Loss #
     ######################
-    task_specific_loss = 0
-    if source_labels is not None:
-        task_specific_loss = get_task_specific_losses(source_labels, transfer_task=transferred_task_logits)
+    if source_labels is not None and params.task_tower_in_g_step:
+        task_specific_losses = get_task_specific_losses(source_labels, source_task_logits, trans_task_logits) \
+                               * params.task_loss_in_g_weight
+        generator_loss += task_specific_losses
 
-    return domain_classifier_loss + task_specific_loss
+    print("g_step_loss %f" % generator_loss.data)
+    return generator_loss
+
+
+def d_step_loss(trans_task_logits, trans_domain_logits, target_domain_logits, source_labels, source_task_logits):
+    """
+    Configure the loss function which runs during the discrimination step
+    Note that during the d-step, the model optimizes both the domain classifier and the task classifier
+    """
+    discriminator_loss = 0
+    ######################
+    #    Domain Loss     #
+    ######################
+    discriminator_loss += get_domain_classifier_losses(trans_domain_logits, target_domain_logits)
+
+    ######################
+    # Task Specific Loss #
+    #     transfer       #
+    ######################
+    if source_labels is not None:
+        discriminator_loss += get_task_specific_losses(source_labels, source_task_logits, trans_task_logits)
+
+    print("d_step_loss %f" % discriminator_loss.data)
+    return discriminator_loss
 
 
 

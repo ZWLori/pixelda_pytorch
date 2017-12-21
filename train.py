@@ -4,13 +4,13 @@ import params
 import construction
 import losses
 import torch
+import itertools
 from torch.autograd import Variable
 from torch.optim import lr_scheduler
 from torchvision import *
-import itertools
 from logger import Logger
-
-
+from PIL import Image
+import torchvision
 def to_np(x):
     return x.data.cpu().numpy()
 
@@ -56,30 +56,33 @@ def run_training(checkpoint_dir):
                                                  source_images_shape=src_imgs_shape,
                                                  num_classes=params.num_classes)
     generator = model_components['generator']
-    transferred_discriminator = model_components['transferred_domain_logits']
+    trans_discriminator = model_components['transferred_domain_logits']
     target_discriminator = model_components['target_domain_logits']
     source_task_classifier = model_components['source_task_classifier']
     target_task_classifier = model_components['target_task_classifier']
-    transferred_task_classifier = model_components['transferred_task_classifier']
+    trans_task_classifier = model_components['transferred_task_classifier']
 
-    # if there is saved model in the checkpoint_dir, load it
+    # Load model
+    resume = False
     if os.listdir(checkpoint_dir):
-        generator.load_state_dict(torch.load(os.path.join(checkpoint_dir, "generator.pt")))
-        transferred_discriminator.load_state_dict(torch.load(os.path.join(checkpoint_dir, "transferred_discriminator.pt")))
-        target_discriminator.load_state_dict(torch.load(os.path.join(checkpoint_dir, "target_discriminator.pt")))
-        source_task_classifier.load_state_dict(torch.load(os.path.join(checkpoint_dir, "source_task_classifier.pt")))
-        target_task_classifier.load_state_dict(torch.load(os.path.join(checkpoint_dir, "target_task_classifier.pt")))
-        transferred_task_classifier.load_state_dict(torch.load(os.path.join(checkpoint_dir, "transferred_task_classifier.pt")))
+        model = torch.load(os.path.join(checkpoint_dir, 'model.pt'))
+        resume_epoch = model['epoch']
+        generator.load_state_dict(model['generator'])
+        trans_discriminator.load_state_dict(model['trans_discriminator'])
+        target_discriminator.load_state_dict(model['target_discriminator'])
+        source_task_classifier.load_state_dict(model['source_task_classifier'])
+        target_task_classifier.load_state_dict(model['target_task_classifier'])
+        trans_task_classifier.load_state_dict(model['trans_task_classifier'])
+        resume = True
 
     print('***** Finish creating model ******')
-    # print(transferred_discriminator)
 
     # optimizers
     lr = params.learning_rate
     opt_generator = torch.optim.Adam(generator.parameters(), lr=lr, betas=params.adam_betas)
-    opt_transferred_discriminator = torch.optim.Adam(transferred_discriminator.parameters(), lr=lr, betas=params.adam_betas)
+    opt_trans_discriminator = torch.optim.Adam(trans_discriminator.parameters(), lr=lr, betas=params.adam_betas)
     opt_target_discriminator = torch.optim.Adam(target_discriminator.parameters(), lr=lr, betas=params.adam_betas)
-    opt_transferred_classifier = torch.optim.Adam(transferred_task_classifier.parameters(), lr=lr, betas=params.adam_betas)
+    opt_trans_classifier = torch.optim.Adam(trans_task_classifier.parameters(), lr=lr, betas=params.adam_betas)
     opt_target_classifier = torch.optim.Adam(target_task_classifier.parameters(), lr=lr, betas=params.adam_betas)
     opt_source_classifier = torch.optim.Adam(source_task_classifier.parameters(), lr=lr, betas=params.adam_betas)
 
@@ -96,16 +99,21 @@ def run_training(checkpoint_dir):
     generator_loss_records = []
     discriminator_loss_records = []
 
+    if resume:
+        start_epoch = resume_epoch
+    else:
+        start_epoch = 0
+        
     ##################
     # Start Training #
     ##################
-    for i in range(params.epochs):
+    for i in range(start_epoch, params.epochs):
         itertools.tee(source_loader)
         itertools.tee(target_loader)
         zipped_loader = enumerate(zip(source_loader, target_loader))
         avg_generator_loss = 0
         avg_discriminator_loss = 0
-        print("epoch %d started" % i)
+        print("********** epoch %d started **********" % i)
         for step, ((images_src, labels_src), (images_tgt, labels_tgt)) in zipped_loader:
             print("batch %s started" % step)
             if torch.cuda.is_available():
@@ -121,24 +129,26 @@ def run_training(checkpoint_dir):
             tgt_lbls = Variable(labels_tgt)
 
             # specify model
-            transferred_imgs = generator(src_imgs)
-            transferred_domain_logits = transferred_discriminator(transferred_imgs)
+            trans_imgs = generator(src_imgs)
+            trans_domain_logits = trans_discriminator(trans_imgs)
             target_domain_logits = target_discriminator(tgt_imgs)
             source_task_logits, source_quaternion = source_task_classifier(src_imgs)
-            transferred_task_logits, transfer_quaternion = transferred_task_classifier(transferred_imgs)
+            trans_task_logits, transfer_quaternion = trans_task_classifier(trans_imgs)
             target_task_logits, target_quaternion = target_task_classifier(tgt_imgs)
 
             # specify losses
             generator_loss = losses.g_step_loss(source_images=src_imgs,
                                                 source_labels=src_lbls,
                                                 source_task_logits=source_task_logits,
-                                                transferred_images=transferred_imgs,
-                                                transferred_task_logits=transferred_task_logits,
-                                                transferred_domain_logits=transferred_discriminator)
-            discriminator_loss = losses.d_step_loss(transferred_task_logits=transferred_task_logits,
-                                                    transferred_domain_logits=transferred_domain_logits,
+                                                trans_images=trans_imgs,
+                                                trans_task_logits=trans_task_logits,
+                                                trans_domain_logits=trans_domain_logits)
+
+            discriminator_loss = losses.d_step_loss(trans_task_logits=trans_task_logits,
+                                                    trans_domain_logits=trans_domain_logits,
                                                     target_domain_logits=target_domain_logits,
-                                                    source_labels=src_lbls)
+                                                    source_labels=src_lbls,
+                                                    source_task_logits=source_task_logits)
 
             avg_generator_loss += generator_loss.data.cpu().numpy()[0]
             avg_discriminator_loss += discriminator_loss.data.cpu().numpy()[0]
@@ -146,9 +156,9 @@ def run_training(checkpoint_dir):
             # forward, backprop and updating
             opt_generator.zero_grad()
             opt_target_discriminator.zero_grad()
-            opt_transferred_discriminator.zero_grad()
+            opt_trans_discriminator.zero_grad()
             opt_target_classifier.zero_grad()
-            opt_transferred_classifier.zero_grad()
+            opt_trans_classifier.zero_grad()
             opt_source_classifier.zero_grad()
 
             generator_loss.backward(retain_graph=True)
@@ -156,11 +166,23 @@ def run_training(checkpoint_dir):
 
             opt_generator.step()
             opt_target_discriminator.step()
-            opt_transferred_discriminator.step()
+            opt_trans_discriminator.step()
             opt_target_classifier.step()
-            opt_transferred_classifier.step()
+            opt_trans_classifier.step()
             opt_source_classifier.step()
 
+	    if torch.all(torch.eq(src_imgs[0][0], src_imgs[0][1])) and torch.all(torch.eq(src_imgs[0][1],src_imgs[0][2])):
+		print("equal channel value")
+	    else:
+		print("not equal")
+	    for count in range(3):
+	    	s_img = torchvision.transforms.ToPILImage(src_imgs[count])
+		print(s_img)
+		s_img.save('images/s' + str(count) + '.jpg', 'JPEG')
+		t_img = torchvision.transforms.ToPILImage(tgt_imgs[count])
+		t_img.save('images/t' + str(count) + '.jpg', 'JPEG')
+		tr_img = torchvision.transforms.ToPILImage(trans_imgs[count])
+		tr_img.save('images/tr' + str(count) + '.jpg', 'JPEG')
         generator_loss_records.append(avg_generator_loss)
         discriminator_loss_records.append(avg_discriminator_loss)
         print("epoch %d | g_loss %f, d_loss %f" % (i, avg_generator_loss / (step + 1),
@@ -169,8 +191,8 @@ def run_training(checkpoint_dir):
         # ---- Tensorboard Logging ---- #
         # (1) Log the scalar values
         info = {
-            'avg_generator_loss': avg_generator_loss.data[0],
-            'avg_discriminator_loss': avg_discriminator_loss.data[0]
+            'avg_generator_loss': avg_generator_loss,
+            'avg_discriminator_loss': avg_discriminator_loss
         }
         for tag, value in info.items():
             logger.scalar_summary(tag, value, step)
@@ -179,35 +201,31 @@ def run_training(checkpoint_dir):
             tag = tag.replace('.', '/')
             logger.histo_summary(tag, to_np(value), step)
             logger.histo_summary(tag + '/grad', to_np(value.grad), step)
-        for tag, value in transferred_discriminator.named_parameters():
-            tag = tag.replace('.', '/')
-            logger.histo_summary(tag, to_np(value), step)
-            logger.histo_summary(tag + '/grad', to_np(value.grad), step)
-        for tag, value in transferred_task_classifier.named_parameters():
+        for tag, value in trans_discriminator.named_parameters():
             tag = tag.replace('.', '/')
             logger.histo_summary(tag, to_np(value), step)
             logger.histo_summary(tag + '/grad', to_np(value.grad), step)
         # (3) Log the images
         info = {
-            'source_images': to_np(src_imgs.view(-1, 32, 32)[:10]),
-            'transfer_images': to_np(transferred_imgs.view(-1, 32, 32)[:10]),
-            'target_images': to_np(tgt_imgs.view(-1, 32, 32)[:10])
+            'source_images': to_np(src_imgs.view(-1, 224, 224)[:10]),
+            'transfer_images': to_np(trans_imgs.view(-1, 224, 224)[:10]),
+            'target_images': to_np(tgt_imgs.view(-1, 224, 224)[:10])
         }
         for tag, images in info.items():
             logger.image_summary(tag, images, step)
 
         if i % 10 == 0:
             # save model
-            torch.save(generator.state_dict(), os.path.join(checkpoint_dir, 'generator.pt'))
-            torch.save(target_discriminator.state_dict(), os.path.join(checkpoint_dir, 'target_discriminator.pt'))
-            torch.save(transferred_discriminator.state_dict(),
-                       os.path.join(checkpoint_dir, 'transferred_discriminator.pt'))
-            torch.save(source_task_classifier.state_dict(), os.path.join(checkpoint_dir, 'source_task_classifier.pt'))
-            torch.save(target_task_classifier.state_dict(), os.path.join(checkpoint_dir, 'target_task_classifier.pt'))
-            torch.save(transferred_task_classifier.state_dict(),
-                       os.path.join(checkpoint_dir, 'transferred_task_classifier.pt'))
+            torch.save({
+                'epoch': i,
+                'generator': generator.state_dict(),
+                'target_discriminator': target_discriminator.state_dict(),
+                'trans_discriminator': trans_discriminator.state_dict(),
+                'source_task_classifier': source_task_classifier.state_dict(),
+                'target_task_classifier': target_task_classifier.state_dict(),
+                'trans_task_classifier': trans_task_classifier.state_dict()
+            }, os.path.join(checkpoint_dir, 'model.pt'))
             print("model saved")
-
 
     return {
         # todo return records
@@ -225,9 +243,5 @@ def main():
 
 
 if __name__ == '__main__':
-    # current_time = str(datetime.now())[:-7].replace(" ", "T").replace(":", "-")
-    # log_file_name = "[{}]_{}".format(current_time, "training.txt")
-    # logger = LoggerGenerator.get_logger(log_file_path="log/{}".format(log_file_name))
     logger = Logger('./log')
-
     main()

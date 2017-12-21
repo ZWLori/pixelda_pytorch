@@ -7,7 +7,7 @@ source_data_path='/home/wanlu/data/domain_adaptation_images2/amazon'
 target_data_path='/home/wanlu/data/domain_adaptation_images2/webcam'
 
 image_scale = 224
-num_classes = 31
+num_classes = 5
 epochs = 1000
 dataset_mean = (0.5, 0.5, 0.5)
 dataset_std = (0.5, 0.5, 0.5)
