@@ -112,7 +112,7 @@ simple_conv_filters=8
 #########################
 # Resnet Hyperparameters#
 #########################
-resnet_blocks=6  # Number of resnet blocks
+resnet_blocks=4  # Number of resnet blocks
 resnet_filters=64  # Number of filters per conv in resnet blocks
 # If true add original input back to result of convolutions inside the
 # resnet arch. If false it turns into a simple stack of conv/relu/BN

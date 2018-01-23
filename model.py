@@ -128,7 +128,7 @@ class ResnetStack(nn.Module):
     def __init__(self, in_channels, output_shape):
         print("ResnetStack")
         super(ResnetStack, self).__init__()
-        # todo to be changed
+        # todo to be changed  =>...damn,,what to be change????
         self.conv1 = nn.Conv2d(in_channels, params.resnet_filters, kernel_size=params.generator_kernel_size, padding=(params.generator_kernel_size-1)//2)
         self.relu = nn.ReLU()
         self.resblks = self.make_layers(params.resnet_filters, params.resnet_blocks)
@@ -162,7 +162,7 @@ class ResnetGenerator(nn.Module):
         self.resnet_stack = ResnetStack(in_channels, output_shape)
 
     def forward(self, x):
-        # todo disabled this first
+        # todo enable the following later
         if self.latent_vars:
             noise_channel = project_latent_vars(
                 proj_shape=list(x.size())[1:3] + [1],
@@ -304,6 +304,8 @@ class DoublingCNNAndQuaternion(nn.Module):
     """
     Alternate conv, pool while doubling filter count
     """
+    # classifier + quaternion regressor.
+    #    [conv + pool]* + FC
 
     def __init__(self, images_size, num_private_layers, num_classes):
         print("DoublingCNNAndQuaternion")

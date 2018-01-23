@@ -93,6 +93,10 @@ def g_step_loss(source_images, source_labels, source_task_logits, trans_images, 
     Configure the loss function which runs during the generation step
     """
     generator_loss = 0
+    # ???
+    # As per the GAN paper, maximize the log probs, instead of minimizing
+    # log(1-probs). Since we're minimizing, we'll minimize -log(probs) which is
+    # the same thing.
     style_transfer_criterion = nn.MultiLabelSoftMarginLoss()
     style_transfer_loss = style_transfer_criterion(trans_domain_logits, torch.ones_like(trans_domain_logits))
 
@@ -101,6 +105,8 @@ def g_step_loss(source_images, source_labels, source_task_logits, trans_images, 
     ###########################
     # Content Similarity Loss #
     ###########################
+    # Optimizes the style transfer network to produce transferred images similar
+    # to the source images.
     generator_loss += transfer_similarity_loss(trans_images,
                                                source_images,
                                                params.transferred_similarity_loss_weight)

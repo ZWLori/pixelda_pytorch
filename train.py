@@ -9,8 +9,8 @@ from torch.autograd import Variable
 from torch.optim import lr_scheduler
 from torchvision import *
 from logger import Logger
-from PIL import Image
-import torchvision
+
+
 def to_np(x):
     return x.data.cpu().numpy()
 
@@ -56,6 +56,7 @@ def run_training(checkpoint_dir):
                                                  source_images_shape=src_imgs_shape,
                                                  num_classes=params.num_classes)
     generator = model_components['generator']
+    print(generator)
     trans_discriminator = model_components['transferred_domain_logits']
     target_discriminator = model_components['target_domain_logits']
     source_task_classifier = model_components['source_task_classifier']
@@ -171,18 +172,15 @@ def run_training(checkpoint_dir):
             opt_trans_classifier.step()
             opt_source_classifier.step()
 
-	    if torch.all(torch.eq(src_imgs[0][0], src_imgs[0][1])) and torch.all(torch.eq(src_imgs[0][1],src_imgs[0][2])):
-		print("equal channel value")
-	    else:
-		print("not equal")
-	    for count in range(3):
-	    	s_img = torchvision.transforms.ToPILImage(src_imgs[count])
-		print(s_img)
-		s_img.save('images/s' + str(count) + '.jpg', 'JPEG')
-		t_img = torchvision.transforms.ToPILImage(tgt_imgs[count])
-		t_img.save('images/t' + str(count) + '.jpg', 'JPEG')
-		tr_img = torchvision.transforms.ToPILImage(trans_imgs[count])
-		tr_img.save('images/tr' + str(count) + '.jpg', 'JPEG')
+            s = src_imgs[0]
+            t = tgt_imgs[0]
+            tr = trans_imgs[0]
+
+            for count in range(3):
+                utils.save_image(images_src[count], 'images/images_src' + str(count) + '.jpg', 'JPEG')
+                utils.save_image(src_imgs.data[count], 'images/s' + str(count) + '.jpg', 'JPEG')
+                utils.save_image(tgt_imgs.data[count], 'images/t' + str(count) + '.jpg', 'JPEG')
+                utils.save_image(trans_imgs.data[count], 'images/tr' + str(count) + '.jpg', 'JPEG')
         generator_loss_records.append(avg_generator_loss)
         discriminator_loss_records.append(avg_discriminator_loss)
         print("epoch %d | g_loss %f, d_loss %f" % (i, avg_generator_loss / (step + 1),
@@ -233,12 +231,12 @@ def run_training(checkpoint_dir):
 
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--checkpoint_dir', help='directory for saving checkpoints')
-    args = parser.parse_args()
+    # parser = argparse.ArgumentParser()
+    # parser.add_argument('--checkpoint_dir', help='directory for saving checkpoints')
+    # args = parser.parse_args()
 
     run_training(
-        checkpoint_dir=args.checkpoint_dir,
+        checkpoint_dir="checkpoint_dir/",
     )
 
 
