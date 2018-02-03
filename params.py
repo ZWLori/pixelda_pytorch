@@ -1,10 +1,10 @@
 import platform
 _IS_LINUX = platform.system() == "Linux"
 
-#source_data_path='/Users/ZWLori/Downloads/domain_adaptation_images/amazon'
-#target_data_path='/Users/ZWLori/Downloads/domain_adaptation_images/webcam'
 source_data_path='/home/wanlu/data/domain_adaptation_images2/amazon'
 target_data_path='/home/wanlu/data/domain_adaptation_images2/webcam'
+#source_data_path='home/wanlu/data/mnist'
+#target_data_path='/home/wanlu/data/mnist_m'
 
 image_scale = 224
 num_classes = 5
@@ -55,7 +55,7 @@ num_encoder_filters=64
 # This is the shape to which the noise vector is projected (if we're
 # transferring from noise).
 # Write this way instead of [4 4 64] for hparam search flexibility
-projection_shape_size=220
+projection_shape_size=50 #4
 projection_shape_channels=64
 
 # Indicates the method by which we enlarge the spatial representation

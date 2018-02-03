@@ -1,4 +1,3 @@
-import argparse
 import os
 import params
 import construction
@@ -41,26 +40,31 @@ def run_training(checkpoint_dir):
 
     # image loading
     # create dataloader
+    # todo ?? must the loaded data be in the same order for both s and t??
     print("Start loading images")
+    # source_dataset = datasets.MNIST(root='./data',train=True, transform=preprocess, download=False)
     source_dataset = datasets.ImageFolder(root=params.source_data_path, transform=preprocess)
-    source_loader = torch.utils.data.DataLoader(source_dataset,
-                                                batch_size=params.batch_size, shuffle=params.shuffle_batch)
+    source_loader = torch.utils.data.DataLoader(dataset=source_dataset,
+                                                batch_size=params.batch_size,
+                                                shuffle=params.shuffle_batch)
+
     target_dataset = datasets.ImageFolder(root=params.target_data_path, transform=preprocess)
-    target_loader = torch.utils.data.DataLoader(target_dataset,
-                                                batch_size=params.batch_size, shuffle=params.shuffle_batch)
+    target_loader = torch.utils.data.DataLoader(dataset=target_dataset,
+                                                batch_size=params.batch_size,
+                                                shuffle=params.shuffle_batch)
 
     print("Start creating model")
     # model components
-    tgt_imgs_shape = src_imgs_shape = [params.batch_size, 3, 224, 224]
+    tgt_imgs_shape = src_imgs_shape = [params.batch_size, 3, params.image_scale, params.image_scale]
     model_components = construction.create_model(target_images_shape=tgt_imgs_shape,
                                                  source_images_shape=src_imgs_shape,
                                                  num_classes=params.num_classes)
+
     generator = model_components['generator']
     print(generator)
-    trans_discriminator = model_components['transferred_domain_logits']
-    target_discriminator = model_components['target_domain_logits']
+    discriminator = model_components['discriminator']
+    # todo should there be only one classifier?
     source_task_classifier = model_components['source_task_classifier']
-    target_task_classifier = model_components['target_task_classifier']
     trans_task_classifier = model_components['transferred_task_classifier']
 
     # Load model
@@ -69,10 +73,9 @@ def run_training(checkpoint_dir):
         model = torch.load(os.path.join(checkpoint_dir, 'model.pt'))
         resume_epoch = model['epoch']
         generator.load_state_dict(model['generator'])
-        trans_discriminator.load_state_dict(model['trans_discriminator'])
-        target_discriminator.load_state_dict(model['target_discriminator'])
+        discriminator.load_state_dict(model['discriminator'])
+        # target_discriminator.load_state_dict(model['target_discriminator'])
         source_task_classifier.load_state_dict(model['source_task_classifier'])
-        target_task_classifier.load_state_dict(model['target_task_classifier'])
         trans_task_classifier.load_state_dict(model['trans_task_classifier'])
         resume = True
 
@@ -81,11 +84,15 @@ def run_training(checkpoint_dir):
     # optimizers
     lr = params.learning_rate
     opt_generator = torch.optim.Adam(generator.parameters(), lr=lr, betas=params.adam_betas)
-    opt_trans_discriminator = torch.optim.Adam(trans_discriminator.parameters(), lr=lr, betas=params.adam_betas)
-    opt_target_discriminator = torch.optim.Adam(target_discriminator.parameters(), lr=lr, betas=params.adam_betas)
+    opt_discriminator = torch.optim.Adam(discriminator.parameters(), lr=lr, betas=params.adam_betas)
     opt_trans_classifier = torch.optim.Adam(trans_task_classifier.parameters(), lr=lr, betas=params.adam_betas)
-    opt_target_classifier = torch.optim.Adam(target_task_classifier.parameters(), lr=lr, betas=params.adam_betas)
     opt_source_classifier = torch.optim.Adam(source_task_classifier.parameters(), lr=lr, betas=params.adam_betas)
+
+    # Decay R by a factor of params.lr_decay_rate every params.lr_decay_steps
+    g_shceduler = lr_scheduler.StepLR(opt_generator, step_size=params.lr_decay_steps,
+                                        gamma=params.lr_decay_rate)
+    d_scheduler = lr_scheduler.StepLR(opt_discriminator, step_size=params.lr_decay_steps,
+                                            gamma=params.lr_decay_rate)
 
     # for saving gradient
     grad_records = {}
@@ -93,9 +100,6 @@ def run_training(checkpoint_dir):
         def hook(grad):
             grad_records[name] = grad
         return hook
-
-    # todo implement
-    exp_lr_shceduler = lr_scheduler.StepLR(opt_generator, step_size=params.lr_decay_steps, gamma=params.lr_decay_rate)
 
     generator_loss_records = []
     discriminator_loss_records = []
@@ -114,9 +118,13 @@ def run_training(checkpoint_dir):
         zipped_loader = enumerate(zip(source_loader, target_loader))
         avg_generator_loss = 0
         avg_discriminator_loss = 0
+        g_shceduler.step()
+        d_scheduler.step()
         print("********** epoch %d started **********" % i)
         for step, ((images_src, labels_src), (images_tgt, labels_tgt)) in zipped_loader:
             print("batch %s started" % step)
+            # convert mnist from greyscale to colored images
+            #images_src = torch.cat((images_src, images_src, images_src), 1)
             if torch.cuda.is_available():
                 images_src = images_src.cuda()
                 images_tgt = images_tgt.cuda()
@@ -131,11 +139,10 @@ def run_training(checkpoint_dir):
 
             # specify model
             trans_imgs = generator(src_imgs)
-            trans_domain_logits = trans_discriminator(trans_imgs)
-            target_domain_logits = target_discriminator(tgt_imgs)
+            trans_domain_logits = discriminator(trans_imgs)
+            target_domain_logits = discriminator(tgt_imgs)
             source_task_logits, source_quaternion = source_task_classifier(src_imgs)
             trans_task_logits, transfer_quaternion = trans_task_classifier(trans_imgs)
-            target_task_logits, target_quaternion = target_task_classifier(tgt_imgs)
 
             # specify losses
             generator_loss = losses.g_step_loss(source_images=src_imgs,
@@ -156,9 +163,7 @@ def run_training(checkpoint_dir):
 
             # forward, backprop and updating
             opt_generator.zero_grad()
-            opt_target_discriminator.zero_grad()
-            opt_trans_discriminator.zero_grad()
-            opt_target_classifier.zero_grad()
+            opt_discriminator.zero_grad()
             opt_trans_classifier.zero_grad()
             opt_source_classifier.zero_grad()
 
@@ -166,18 +171,11 @@ def run_training(checkpoint_dir):
             discriminator_loss.backward(retain_graph=True)
 
             opt_generator.step()
-            opt_target_discriminator.step()
-            opt_trans_discriminator.step()
-            opt_target_classifier.step()
+            opt_discriminator.step()
             opt_trans_classifier.step()
             opt_source_classifier.step()
 
-            s = src_imgs[0]
-            t = tgt_imgs[0]
-            tr = trans_imgs[0]
-
             for count in range(3):
-                utils.save_image(images_src[count], 'images/images_src' + str(count) + '.jpg', 'JPEG')
                 utils.save_image(src_imgs.data[count], 'images/s' + str(count) + '.jpg', 'JPEG')
                 utils.save_image(tgt_imgs.data[count], 'images/t' + str(count) + '.jpg', 'JPEG')
                 utils.save_image(trans_imgs.data[count], 'images/tr' + str(count) + '.jpg', 'JPEG')
@@ -199,7 +197,7 @@ def run_training(checkpoint_dir):
             tag = tag.replace('.', '/')
             logger.histo_summary(tag, to_np(value), step)
             logger.histo_summary(tag + '/grad', to_np(value.grad), step)
-        for tag, value in trans_discriminator.named_parameters():
+        for tag, value in discriminator.named_parameters():
             tag = tag.replace('.', '/')
             logger.histo_summary(tag, to_np(value), step)
             logger.histo_summary(tag + '/grad', to_np(value.grad), step)
@@ -217,10 +215,9 @@ def run_training(checkpoint_dir):
             torch.save({
                 'epoch': i,
                 'generator': generator.state_dict(),
-                'target_discriminator': target_discriminator.state_dict(),
-                'trans_discriminator': trans_discriminator.state_dict(),
+                'discriminator': discriminator.state_dict(),
+                # 'trans_discriminator': trans_discriminator.state_dict(),
                 'source_task_classifier': source_task_classifier.state_dict(),
-                'target_task_classifier': target_task_classifier.state_dict(),
                 'trans_task_classifier': trans_task_classifier.state_dict()
             }, os.path.join(checkpoint_dir, 'model.pt'))
             print("model saved")
@@ -231,10 +228,6 @@ def run_training(checkpoint_dir):
 
 
 def main():
-    # parser = argparse.ArgumentParser()
-    # parser.add_argument('--checkpoint_dir', help='directory for saving checkpoints')
-    # args = parser.parse_args()
-
     run_training(
         checkpoint_dir="checkpoint_dir/",
     )

@@ -68,11 +68,11 @@ def create_model(
             noise = torch.FloatTensor(noise_shape).uniform_(-1, 1)
         latent_vars['noise'] = noise
 
-    ####################
-    # Create generator #
-    ####################
+    ###################
+    #    Generator    #
+    ###################
     if params.arch == 'resnet':
-        generator = model.ResnetGenerator(source_images_shape, list(target_images_shape)[1:4], latent_vars=latent_vars)
+        generator = model.ResnetGenerator(source_images_shape, target_images_shape, latent_vars=latent_vars)
     elif params.arch == 'residual_interpretation':
         generator = model.ResidualInterpretationGenerator(source_images_shape, latent_vars=latent_vars)
     elif params.arch == 'simple':
@@ -83,12 +83,13 @@ def create_model(
     components['generator'] = generator
 
     #####################
-    # Domain Classifier #
+    #   Discriminator   #
     #####################
     # todo assume all the images have same shape
     transferred_images_shape = target_images_shape
-    components['transferred_domain_logits'] = model.Discriminator(transferred_images_shape)
-    components['target_domain_logits'] = model.Discriminator(target_images_shape)
+    components['discriminator'] = model.Discriminator(transferred_images_shape)
+    # components['transferred_domain_logits'] = model.Discriminator(transferred_images_shape)
+    # components['target_domain_logits'] = model.Discriminator(target_images_shape)
 
     ###################
     # Task Classifier #

@@ -38,7 +38,7 @@ def get_domain_classifier_losses(trans_domain_logits, target_domain_logits):
     if params.domain_loss_weight == 0:
         print("Domain classifier loss weight is 0.")
         return 0
-    transfer_label = torch.ones_like(trans_domain_logits)
+    transfer_label = torch.zeros_like(trans_domain_logits)
     transferred_criterion = loss.MultiLabelSoftMarginLoss()
     transferred_domain_loss = transferred_criterion(trans_domain_logits, transfer_label)
 
@@ -76,13 +76,12 @@ def transfer_similarity_loss(reconstructions, source_images, weight):
     """
     Computes a loss encouraging similarity between source and transferred.
     """
-    #todo ???? shouldnt be similarity btw target and transfer???
 
     if weight == 0:
         return 0
 
-    reconstruction_similarity_criterion = loss.MSELoss()
     # todo : check pairewise mse
+    reconstruction_similarity_criterion = loss.MSELoss()
     reconstruction_similarity_loss = reconstruction_similarity_criterion(reconstructions, source_images)
 
     return reconstruction_similarity_loss
@@ -93,11 +92,11 @@ def g_step_loss(source_images, source_labels, source_task_logits, trans_images, 
     Configure the loss function which runs during the generation step
     """
     generator_loss = 0
-    # ???
     # As per the GAN paper, maximize the log probs, instead of minimizing
     # log(1-probs). Since we're minimizing, we'll minimize -log(probs) which is
     # the same thing.
     style_transfer_criterion = nn.MultiLabelSoftMarginLoss()
+    # Check whether the transferred images are discriminated as 1 or 0
     style_transfer_loss = style_transfer_criterion(trans_domain_logits, torch.ones_like(trans_domain_logits))
 
     generator_loss += style_transfer_loss

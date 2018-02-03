@@ -100,7 +100,6 @@ class ResidualBlock(nn.Module):
     Create a resnet block
     """
     def __init__(self, in_dim):
-        print("ResidualBlock")
         super(ResidualBlock, self).__init__()
 
         self.conv1 = nn.Sequential(
@@ -126,13 +125,12 @@ class ResnetStack(nn.Module):
     Create a resnet style transfer block
     """
     def __init__(self, in_channels, output_shape):
-        print("ResnetStack")
         super(ResnetStack, self).__init__()
         # todo to be changed  =>...damn,,what to be change????
         self.conv1 = nn.Conv2d(in_channels, params.resnet_filters, kernel_size=params.generator_kernel_size, padding=(params.generator_kernel_size-1)//2)
         self.relu = nn.ReLU()
         self.resblks = self.make_layers(params.resnet_filters, params.resnet_blocks)
-        self.conv2 = nn.Conv2d(params.resnet_filters, output_shape[0], kernel_size=1)
+        self.conv2 = nn.Conv2d(params.resnet_filters, output_shape[1], kernel_size=1)
         self.tanh = nn.Tanh()
 
     def make_layers(self, in_channels, num_blks):
@@ -154,11 +152,10 @@ class ResnetStack(nn.Module):
 
 class ResnetGenerator(nn.Module):
     """Creates a ResNet-based generator."""
-    def __init__(self, source_images_size, output_shape, latent_vars=None):
-        print("ResnetGenerator")
+    def __init__(self, source_images_shape, output_shape, latent_vars=None):
         super(ResnetGenerator, self).__init__()
         self.latent_vars = latent_vars
-        in_channels = list(source_images_size)[1]
+        in_channels = list(source_images_shape)[1]
         self.resnet_stack = ResnetStack(in_channels, output_shape)
 
     def forward(self, x):
@@ -237,7 +234,6 @@ class ResidualInterpretationGenerator(nn.Module):
 class Discriminator(nn.Module):
     """Creates a discriminator for a GAN."""
     def __init__(self, images_size):
-        print("Discriminator")
         super(Discriminator, self).__init__()
         if params.discriminator_image_noise:
             # images = self.add_noise(images)
@@ -258,6 +254,7 @@ class Discriminator(nn.Module):
         # height after first conv layer
         height = (images_size[2] - params.discriminator_kernel_size)//params.discriminator_first_stride + 1
         # todo check how to decide the projection shape
+        # W=(W-K+2P)/S+1
         while height >= params.projection_shape_size:
             layers = []
             num_filters = int(params.num_discriminator_filters * (params.discriminator_filter_factor ** (block_id - 1)))
@@ -270,15 +267,17 @@ class Discriminator(nn.Module):
             if params.discriminator_do_pooling:
                 layers.append(nn.AvgPool2d(kernel_size=2, stride=2))
                 height = (height - 2)/2+1
-            #else:
-             #   layers.append(
-              #      nn.Conv2d(num_filters, num_filters, kernel_size=params.discriminator_kernel_size))
+            else:
+                layers.append(
+                    nn.Conv2d(num_filters, num_filters, kernel_size=params.discriminator_kernel_size, stride=2))
+                height = (height - params.discriminator_kernel_size)/2 + 1
+                layers.append(nn.BatchNorm2d(num_filters))
 
             # noise = self.add_noise(hidden=None, scope_num=block_id)
             # layers.append(noise)
             self.discriminator_blks.append(nn.Sequential(*layers))
             block_id += 1
-        # todo: think a way to change teh hard code calculation
+    # todo: think a way to change the hard code calculation
         self.discriminator_blks = nn.Sequential(*self.discriminator_blks)
         self.fully_connected = nn.Linear(num_filters * height * height, 1)
 
@@ -293,7 +292,6 @@ class Discriminator(nn.Module):
     def forward(self, x):
         out = self.conv1(x)
         out = self.lrelu(out)
-        # while list(out.size())[2] > params.projection_shape_size:
         out = self.discriminator_blks(out)
         out = flatten(out)
         out = self.fully_connected(out)
@@ -308,7 +306,6 @@ class DoublingCNNAndQuaternion(nn.Module):
     #    [conv + pool]* + FC
 
     def __init__(self, images_size, num_private_layers, num_classes):
-        print("DoublingCNNAndQuaternion")
         super(DoublingCNNAndQuaternion, self).__init__()
         in_channel = list(images_size)[1]
         height = list(images_size)[2]
